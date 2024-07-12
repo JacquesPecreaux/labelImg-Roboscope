@@ -8,6 +8,9 @@ import shutil
 import sys
 import webbrowser as wb
 from functools import partial
+import cv2
+import numpy as np
+import time
 
 try:
     from PyQt5.QtGui import *
@@ -47,6 +50,7 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
+from libs.slicesFromYolo import slicesFromYolo_fct,normalisation
 
 __appname__ = 'labelImg'
 
@@ -219,6 +223,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         open = action(get_str('openFile'), self.open_file,
                       'Ctrl+O', 'open', get_str('openFileDetail'))
+                      
+        createSlices = action(get_str('createSlices'), self.createSlices,
+                      'Ctrl+Shift+S', 'createSlices', get_str('createSlices'))
 
         open_dir = action(get_str('openDir'), self.open_dir_dialog,
                           'Ctrl+u', 'open', get_str('openDir'))
@@ -380,7 +387,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
         # Store actions for further handling.
-        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
+        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open,createSlices=createSlices, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
@@ -390,7 +397,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
                               lightActions=light_actions,
                               fileMenuActions=(
-                                  open, open_dir, save, save_as, close, reset_all, quit),
+                                  open, open_dir, save, save_as,createSlices, close, reset_all, quit),
                               beginner=(), advanced=(),
                               editMenu=(edit, copy, delete,
                                         None, color1, self.draw_squares_option),
@@ -427,7 +434,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.display_label_option.triggered.connect(self.toggle_paint_labels_option)
 
         add_actions(self.menus.file,
-                    (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
+                    (open, open_dir, change_save_dir, open_annotation,createSlices, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
             self.auto_saving,
@@ -449,12 +456,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.tools = self.toolbar('Tools')
         self.actions.beginner = (
-            open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
+            open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format,createSlices, None, create, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
             light_brighten, light, light_darken, light_org)
 
         self.actions.advanced = (
-            open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
+            open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format,createSlices, None,
             create_mode, edit_mode, None,
             hide_all, show_all)
 
@@ -1463,7 +1470,23 @@ class MainWindow(QMainWindow, WindowMixin):
             self.cur_img_idx = 0
             self.img_count = 1
             self.load_file(filename)
-
+     
+    def createSlices(self, _value=False):
+        path = os.path.dirname(ustr(self.file_path))\
+            if self.file_path else '.'
+        if self.label_file_format == LabelFileFormat.PASCAL_VOC:
+            annotations_path = ustr(QFileDialog.getExistingDirectory(self,
+                                                             '%s - Choose a xml annotations directory' % __appname__, path,  QFileDialog.ShowDirsOnly
+                                                             | QFileDialog.DontResolveSymlinks))
+            img_path = ustr(QFileDialog.getExistingDirectory(self,
+                                                             '%s - Choose the annotated images directory' % __appname__, annotations_path,  QFileDialog.ShowDirsOnly
+                                                             | QFileDialog.DontResolveSymlinks))
+            slices_path = ustr(QFileDialog.getExistingDirectory(self,
+                                                             '%s - Choose the slices directory' % __appname__, annotations_path,  QFileDialog.ShowDirsOnly
+                                                             | QFileDialog.DontResolveSymlinks))
+            slicesFromYolo_fct(img_path,annotations_path,slices_path)
+        return
+        
     def save_file(self, _value=False):
         if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
             if self.file_path:
@@ -1672,8 +1695,39 @@ class MainWindow(QMainWindow, WindowMixin):
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])
 
+def read_opencv(path):
+    """Load an image via opencv and convert it to a QImage.
+    Supports all image formats supported by opencv, including 16 bit grayscale and color images."""
+    image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    image=normalisation(image)
+    if image.max() > 255:
+        image=image/256
+        image = image.astype('uint8')
+    if len(image.shape) == 2:
+        image = np.tile(image, (3, 1, 1)).transpose((1, 2, 0))
+
+    height, width, channels = image.shape
+    if channels == 3:
+        # convert BGR to RGB
+        image[:, :, [0, 1, 2]] = image[:, :, [2, 1, 0]]
+        image = image.copy()
+        return QImage(image, width, height, image.strides[0], QImage.Format_RGB888)
+    elif channels == 4:
+        # convert BGRA to RGBA
+        image[:, :, [0, 1, 2, 3]] = image[:, :, [2, 1, 0, 3]]
+        image = image.copy()
+        return QImage(image, width, height, image.strides[0], QImage.Format_RGBA8888)
+    else:
+        assert False
 
 def read(filename, default=None):
+    # try loading image using opencv (for 16 bit image support)
+    try:
+        return read_opencv(filename)
+    except:
+        pass
+
+    # if opencv fails for any reason (e.g. no svg support), try the Qt image reader instead.
     try:
         reader = QImageReader(filename)
         reader.setAutoTransform(True)

@@ -34,7 +34,7 @@ class LabelDialog(QDialog):
         bb.rejected.connect(self.reject)
 
         layout = QVBoxLayout()
-        layout.addWidget(bb, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(bb, alignment=Qt.AlignLeft)
         layout.addWidget(self.edit)
 
         if list_item is not None and len(list_item) > 0:
